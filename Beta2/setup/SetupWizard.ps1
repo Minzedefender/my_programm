@@ -1,6 +1,7 @@
 ﻿#requires -Version 5.1
 Add-Type -AssemblyName System.Windows.Forms
 Import-Module -Force -DisableNameChecking (Join-Path $PSScriptRoot '..\modules\Common.Crypto.psm1')
+Import-Module -Force -DisableNameChecking (Join-Path $PSScriptRoot '..\modules\Notifications.Telegram.psm1')
 
 # ---------- helpers ----------
 function Select-FolderDialog($description) {
@@ -82,6 +83,32 @@ if ((Test-Path $secretsFile) -and (Test-Path $keyPath)) {
 }
 
 $allConfigs = @()
+
+$telegramSettings = [ordered]@{
+    Enabled             = $false
+    ChatId              = ''
+    DisableNotification = $false
+}
+$telegramToken = $null
+
+if (Test-Path $settingsFile) {
+    try {
+        $existingSettings = ConvertTo-Hashtable (Get-Content $settingsFile -Raw | ConvertFrom-Json)
+        if ($existingSettings.ContainsKey('Notifications')) {
+            $existingNotif = ConvertTo-Hashtable $existingSettings['Notifications']
+            if ($existingNotif.ContainsKey('Telegram')) {
+                $existingTelegram = ConvertTo-Hashtable $existingNotif['Telegram']
+                if ($existingTelegram.ContainsKey('Enabled')) { $telegramSettings.Enabled = [bool]$existingTelegram['Enabled'] }
+                if ($existingTelegram.ContainsKey('ChatId'))  { $telegramSettings.ChatId  = "" + $existingTelegram['ChatId'] }
+                if ($existingTelegram.ContainsKey('DisableNotification')) { $telegramSettings.DisableNotification = [bool]$existingTelegram['DisableNotification'] }
+            }
+        }
+    } catch { }
+}
+
+if ($allSecrets.ContainsKey('__TelegramBotToken')) {
+    $telegramToken = [string]$allSecrets['__TelegramBotToken']
+}
 
 # ---------- wizard ----------
 while ($true) {
@@ -177,6 +204,59 @@ while ($true) {
     if ($more -ne 1) { break }
 }
 
+# ---------- telegram notifications ----------
+if ($telegramSettings.Enabled) {
+    Write-Host ("Текущий статус Telegram-отчётов: включено (chat_id: {0})" -f $telegramSettings.ChatId) -ForegroundColor DarkCyan
+} else {
+    Write-Host "Текущий статус Telegram-отчётов: выключено" -ForegroundColor DarkCyan
+}
+$tgChoice = Read-Choice "Отправлять отчёт о завершении в Telegram?" @('Да','Нет')
+if ($tgChoice -eq 1) {
+    $telegramSettings.Enabled = $true
+    if ($telegramSettings.ChatId) {
+        Write-Host ("Текущий chat_id: {0}" -f $telegramSettings.ChatId) -ForegroundColor DarkCyan
+    }
+    $chatInput = Read-Host "Введите chat_id получателя (пользователя или группы, пусто — оставить текущий)"
+    if ($chatInput) { $telegramSettings.ChatId = $chatInput }
+
+    $currentSilent = if ($telegramSettings.DisableNotification) { 'Да' } else { 'Нет' }
+    $silentChoice = Read-Choice "Отправлять сообщения без звука? (текущее: $currentSilent)" @('Нет','Да','Оставить текущее')
+    switch ($silentChoice) {
+        1 { $telegramSettings.DisableNotification = $false }
+        2 { $telegramSettings.DisableNotification = $true }
+        default { }
+    }
+
+    $tokenInput = Read-Host "Введите токен бота Telegram (пусто — оставить текущий)"
+    if ($tokenInput) {
+        $telegramToken = $tokenInput
+        $allSecrets['__TelegramBotToken'] = $tokenInput
+    }
+
+    if ($telegramSettings.ChatId -and $telegramToken) {
+        $testChoice = Read-Choice "Отправить тестовое сообщение сейчас?" @('Да','Нет')
+        if ($testChoice -eq 1) {
+            try {
+                $testText = "Тестовый отчёт: $(Get-Date -Format 'dd.MM.yyyy HH:mm:ss')"
+                if ($telegramSettings.DisableNotification) {
+                    Send-TelegramMessage -Token $telegramToken -ChatId $telegramSettings.ChatId -Text $testText -DisableNotification
+                } else {
+                    Send-TelegramMessage -Token $telegramToken -ChatId $telegramSettings.ChatId -Text $testText
+                }
+                Write-Host "Тестовое сообщение отправлено." -ForegroundColor Green
+            } catch {
+                Write-Host "Не удалось отправить тестовое сообщение: $($_.Exception.Message)" -ForegroundColor Red
+            }
+        }
+    } else {
+        Write-Host "Для отправки отчётов необходимо указать chat_id и токен бота." -ForegroundColor Yellow
+    }
+} else {
+    $telegramSettings.Enabled = $false
+    $telegramSettings.ChatId = ''
+    $telegramSettings.DisableNotification = $false
+}
+
 # ---------- save ----------
 foreach ($cfg in $allConfigs) {
     $cfgPath = Join-Path $basesDir ("{0}.json" -f $cfg.Tag)
@@ -188,6 +268,8 @@ Encrypt-Secrets -Secrets $allSecrets -KeyPath $keyPath -OutFile $secretsFile
 Write-Host "Секреты сохранены и зашифрованы." -ForegroundColor Green
 
 $act = Read-Choice "Что делать после завершения бэкапа?" @('Выключить ПК','Перезагрузить ПК','Ничего не делать')
-@{ AfterBackup = $act } | ConvertTo-Json -Depth 2 | Set-Content -Path $settingsFile -Encoding UTF8
+$settings = [ordered]@{ AfterBackup = $act }
+$settings.Notifications = @{ Telegram = $telegramSettings }
+$settings | ConvertTo-Json -Depth 6 | Set-Content -Path $settingsFile -Encoding UTF8
 
 Write-Host "[INFO] Настройка баз завершена." -ForegroundColor Green

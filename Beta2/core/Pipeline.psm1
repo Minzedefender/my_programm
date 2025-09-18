@@ -106,10 +106,12 @@ function Invoke-Pipeline {
     if (!(Test-Path $configFile)) { throw "Конфиг базы '$tag' не найден: $configFile" }
 
     $config  = ConvertTo-Hashtable (Get-Content $configFile -Raw | ConvertFrom-Json)
-	# >>> пропуск отключенных баз
-if ($config.ContainsKey('Disabled') -and $config['Disabled']) {
-    & $log ("База [{0}] отключена (Disabled=true) — пропуск." -f $tag)
-    return $null
+    # >>> пропуск отключенных баз
+    if ($config.ContainsKey('Disabled') -and $config['Disabled']) {
+        & $log ("База [{0}] отключена (Disabled=true) — пропуск." -f $tag)
+        return $null
+    }
+
     $secrets = @{}
     if (Test-Path $secretsPath) {
         try { $secrets = ConvertTo-Hashtable (Decrypt-Secrets -InFile $secretsPath -KeyPath $keyPath) } catch { $secrets = @{} }
