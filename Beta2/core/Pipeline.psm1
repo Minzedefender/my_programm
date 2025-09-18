@@ -9,9 +9,24 @@ if (Test-Path (Join-Path $ModulesRoot 'Cloud.YandexDisk.psm1')) {
 
 function ConvertTo-Hashtable {
     param([Parameter(Mandatory)]$Object)
+
+    if ($null -eq $Object) { return @{} }
     if ($Object -is [hashtable]) { return $Object }
+
+    if ($Object -is [System.Collections.IDictionary]) {
+        $ht = @{}
+        foreach ($key in $Object.Keys) {
+            $ht[$key] = $Object[$key]
+        }
+        return $ht
+    }
+
     $ht = @{}
-    $Object.PSObject.Properties | ForEach-Object { $ht[$_.Name] = $_.Value }
+    if ($Object.PSObject) {
+        foreach ($prop in $Object.PSObject.Properties) {
+            $ht[$prop.Name] = $prop.Value
+        }
+    }
     return $ht
 }
 
@@ -106,10 +121,12 @@ function Invoke-Pipeline {
     if (!(Test-Path $configFile)) { throw "Конфиг базы '$tag' не найден: $configFile" }
 
     $config  = ConvertTo-Hashtable (Get-Content $configFile -Raw | ConvertFrom-Json)
-	# >>> пропуск отключенных баз
-if ($config.ContainsKey('Disabled') -and $config['Disabled']) {
-    & $log ("База [{0}] отключена (Disabled=true) — пропуск." -f $tag)
-    return $null
+    # >>> пропуск отключенных баз
+    if ($config.ContainsKey('Disabled') -and $config['Disabled']) {
+        & $log ("База [{0}] отключена (Disabled=true) — пропуск." -f $tag)
+        return $null
+    }
+
     $secrets = @{}
     if (Test-Path $secretsPath) {
         try { $secrets = ConvertTo-Hashtable (Decrypt-Secrets -InFile $secretsPath -KeyPath $keyPath) } catch { $secrets = @{} }
